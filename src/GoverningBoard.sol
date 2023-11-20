@@ -3,16 +3,15 @@ pragma solidity ^0.8.13;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./GovernanceNFT.sol";
 
+/// @title GoverningBoard, a contract that implements governance processes
+/// @author github:adeolu98
 /** 
-GoverningBoard should: 
+ @dev  GoverningBoard should: 
 - allow BoardMembers to vote, create and execute proposals 
 - allow contract owner to veto a proposal
 */
 
 contract GoverningBoard is Ownable {
-    GovernanceNFT private governanceNFT;
-    uint public minVotesThreshhold; //where 1e4 means 100%, 1% = 1e2
-
     enum ProposalStatus {
         active, //if active you can vote on it.
         passed, //if passed it can be executed
@@ -30,6 +29,9 @@ contract GoverningBoard is Ownable {
         bool vetoed;
     }
 
+    GovernanceNFT private governanceNFT;
+    uint public minVotesThreshhold; //where 1e4 means 100%, 1% = 1e2
+
     mapping(bytes32 => Proposal) private ProposalsMapping;
     mapping(bytes32 => uint) private VoteCount;
     mapping(bytes32 => mapping(address => bool)) public BoardMemberVoted;
@@ -39,6 +41,8 @@ contract GoverningBoard is Ownable {
     event Executed(bytes32 proposalID, uint time);
     event Vetoed(bytes32 proposalID);
     event ReceivedEther(uint value, address sender);
+    event ChangedMinVotesThreshhold(uint newMinVotesThreshhold);
+    event WithdrawnETH(uint amountToWithdraw);
 
     error InvalidDeadline();
     error InvalidTimeOfExecution();
@@ -47,27 +51,41 @@ contract GoverningBoard is Ownable {
     error InvalidVotingPower();
     error NotEnoughVotes();
     error AlreadyProposed();
+    error InvalidCaller();
 
+    //@param _governanceNFT is the address of the NFT token
+    //@param _minVotesThreshhold is the minimum threshold for votes on a proposal,
+    //represented as 1e4 = 100% or 1% = 1e2 just like percentages. Each proposal must have votes
+    //summed up to be >= the mimumthreshold. e.g if threshold is 20%, and there are 10 totalVotes,
+    //the proposal must have 2 or more votes.
+    //@dev checks the _minVotesThreshhold to be in range and sets the values in storage
     constructor(
         GovernanceNFT _governanceNFT,
         uint _minVotesThreshhold
     ) Ownable(msg.sender) {
         require(
-            minVotesThreshhold >= 1e2 && minVotesThreshhold <= 1e4,
+            _minVotesThreshhold >= 1e2 && _minVotesThreshhold <= 1e4,
             "invalid votes threshold"
         );
+        require(address(_governanceNFT) != address(0), "cant set to addr(0)");
         governanceNFT = _governanceNFT;
         minVotesThreshhold = _minVotesThreshhold;
     }
 
+    /// @notice this function is used to make proposals for the governance process.
+    /// only the nft token holders can propose.
+    /// @param _proposal contains a Proposal struct of the proposal properties
+    /// @param _tokenID is the token id of the nft holder.
+    /// @dev checks validity of inputs and adds proposal to proposal mapping, proposer votes on its proposal with all his votes.
+    /// @return returns the new proposal ID
     function propose(
         Proposal memory _proposal,
-        uint40 tokenID
+        uint40 _tokenID
     ) external returns (bytes32) {
-        //to vote you must be an nft holder.
         if (_proposal.proposalDeadline < block.timestamp)
             revert InvalidDeadline();
         if (_proposal.timeOfExecution != 0) revert InvalidTimeOfExecution();
+        if (_proposal.proposer != msg.sender) revert InvalidCaller();
 
         // add new proposal to proposals mapping
         bytes32 proposalID = keccak256(
@@ -75,8 +93,7 @@ contract GoverningBoard is Ownable {
                 _proposal.proposalTarget,
                 _proposal.proposalDeadline,
                 _proposal.proposalTxData,
-                _proposal.proposer,
-                msg.sender
+                _proposal.proposer
             )
         );
 
@@ -87,37 +104,47 @@ contract GoverningBoard is Ownable {
         //add proposal to mapping
         ProposalsMapping[proposalID] = _proposal;
 
-        //the proposer must vote on his proposal.
-        vote(proposalID, tokenID, governanceNFT.VotingPower(tokenID));
+        //the proposer must vote on his proposal. to vote you must be an nft holder.
+        vote(proposalID, _tokenID, governanceNFT.VotingPower(_tokenID));
 
         emit Proposed(proposalID, block.timestamp);
         return proposalID;
     }
 
-    function vote(bytes32 _proposalID, uint tokenID, uint numOfVotes) public {
+    /// @notice allows members of then board to vote on proposals, user can decide to put all of their votes behind a proposal to fully support it
+    /// or put the least amount to show the least bit of support.
+    /// @dev function does input validation, then adds the new vote and marks member as voted. member cant vote twice.
+    /// @param _proposalID the ID of the proposal to vote on
+    /// @param _tokenID the nft tokenID owned by the caller
+    /// @param _numOfVotes the amount of a members total votes the member wants to use to back the proposal,
+    /// all for full support, least amount for least amount of support
+    function vote(bytes32 _proposalID, uint _tokenID, uint _numOfVotes) public {
         //check that proposal is not vetoed, expired or executed and check that user has not voted on the proposal before
         if (
-            ProposalsMapping[_proposalID].timeOfExecution != 0 &&
-            ProposalsMapping[_proposalID].proposalDeadline < block.timestamp
+            getProposalStatus(_proposalID) != ProposalStatus.passed &&
+            getProposalStatus(_proposalID) != ProposalStatus.active
         ) revert InvalidProposal(); //proposal must not been executed or expired
         if (BoardMemberVoted[_proposalID][msg.sender] == true)
             revert InvalidVoter(); //cant vote twice
-        if (governanceNFT.ownerOf(tokenID) != msg.sender) revert InvalidVoter(); //msut have governance nft to vote
-        if (governanceNFT.VotingPower(tokenID) < numOfVotes)
+        if (governanceNFT.ownerOf(_tokenID) != msg.sender)
+            revert InvalidVoter(); //msut have governance nft to vote
+        if (governanceNFT.VotingPower(_tokenID) < _numOfVotes)
             revert InvalidVotingPower();
-        if (ProposalsMapping[_proposalID].vetoed == true)
-            revert InvalidProposal();
+        if (_numOfVotes == 0) revert InvalidVotingPower();
 
         //mark member as voted.
         BoardMemberVoted[_proposalID][msg.sender] == true;
 
         //vote
-        VoteCount[_proposalID] += numOfVotes;
+        VoteCount[_proposalID] += _numOfVotes;
 
-        emit Voted(msg.sender, numOfVotes, _proposalID);
+        emit Voted(msg.sender, _numOfVotes, _proposalID);
     }
 
-    // gated function
+    /// @notice callable by owner only. in some rare cases owner may step in to cancel faulty proposals
+    /// @dev sets proposal's vetoed status to be true.
+    /// @param _proposalID the ID of the proposal to veto
+    /// @return true after success
     function veto(bytes32 _proposalID) external onlyOwner returns (bool) {
         Proposal storage proposal = ProposalsMapping[_proposalID];
         proposal.vetoed = true;
@@ -127,6 +154,10 @@ contract GoverningBoard is Ownable {
         return true;
     }
 
+    /// @notice executes a passed proposal.
+    /// @dev proposal status must be passed, timeOfExecution is set in storage and execution is done
+    /// @param _proposalID the ID of the proposal to execute
+    /// @return true if sucessfull and return the timeOfExecution.
     function execute(
         bytes32 _proposalID
     ) external payable returns (bool, uint timeOfExecution) {
@@ -137,20 +168,19 @@ contract GoverningBoard is Ownable {
             revert InvalidProposal();
 
         //execute
-        proposal.timeOfExecution = uint40(block.timestamp);
+        proposal.timeOfExecution = uint40(block.timestamp); //this is set before execution to prevent reentry
         address target = proposal.proposalTarget;
         bytes memory proposalTxData = proposal.proposalTxData;
-        (bool s, bytes memory r) = target.call{value: msg.value}(
-            proposalTxData
-        );
+        (bool s, ) = target.call{value: msg.value}(proposalTxData);
         require(s == true, "execution failed");
 
         emit Executed(_proposalID, block.timestamp);
         return (s, block.timestamp);
     }
 
-    
-
+    /// @notice returns the status of the proposal
+    /// @param _proposalID the ID of the proposal to check
+    /// @return status is the status of proposal, it is of type enum ProposalStatus.
     function getProposalStatus(
         bytes32 _proposalID
     ) public view returns (ProposalStatus status) {
@@ -179,6 +209,25 @@ contract GoverningBoard is Ownable {
         if (proposal.proposalDeadline > block.timestamp) {
             return ProposalStatus.active;
         }
+    }
+
+    /// @notice changes the value of minVotesThreshhold
+    /// @param _minVotesThreshhold is the new minVotesThreshhold value to be set
+    function changeMinThreshold(uint _minVotesThreshhold) external onlyOwner {
+        require(
+            _minVotesThreshhold >= 1e2 && _minVotesThreshhold <= 1e4,
+            "invalid votes threshold"
+        );
+        minVotesThreshhold = _minVotesThreshhold;
+        emit ChangedMinVotesThreshhold(_minVotesThreshhold);
+    }
+
+    /// @notice withdraw excess eth, callable by owner
+    function withdrawEth() public onlyOwner {
+        uint amountToWithdraw = address(this).balance;
+        payable(msg.sender).transfer(amountToWithdraw);
+
+        emit WithdrawnETH(amountToWithdraw);
     }
 
     receive() external payable {
