@@ -11,10 +11,6 @@ contract GovernanceNftTest is Test, SetUpContractsTest {
         super.setUp();
     }
 
-    function testIsItHere() public {
-        assertNotEq(address(governanceNFT), address(0));
-    }
-
     function testMint() public {
         uint votingPowerAmt = 10;
         vm.prank(owner);
@@ -118,5 +114,22 @@ contract GovernanceNftTest is Test, SetUpContractsTest {
         uint tokenId = governanceNFT.mint(address(1), 20);
         assertEq(governanceNFT.ownerOf(tokenId), address(1));
         vm.stopPrank();
+    }
+
+    function testMintOnlyOwner() public {
+        uint votingPowerAmt = 10;
+        vm.expectRevert(); //since we dont call with owner address
+        vm.prank(address(300));
+        governanceNFT.mint(address(10), votingPowerAmt);
+    }
+
+    function testBurnOnlyOwner() public {
+        vm.prank(owner);
+        uint tokenId = governanceNFT.mint(address(1), 20);
+
+        // now try to burn the token minted to address(1) when caller is not owner
+        vm.expectRevert();
+        vm.prank(address(300));
+        governanceNFT.burn(tokenId);
     }
 }

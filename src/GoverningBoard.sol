@@ -32,8 +32,8 @@ contract GoverningBoard is Ownable {
     GovernanceNFT private governanceNFT;
     uint public minVotesThreshhold; //where 1e4 means 100%, 1% = 1e2
 
-    mapping(bytes32 => Proposal) private ProposalsMapping;
-    mapping(bytes32 => uint) private VoteCount;
+    mapping(bytes32 => Proposal) public ProposalsMapping;
+    mapping(bytes32 => uint) public VoteCount;
     mapping(bytes32 => mapping(address => bool)) public BoardMemberVoted;
 
     event Proposed(bytes32 proposalID, uint currentTimeStamp);
@@ -98,6 +98,7 @@ contract GoverningBoard is Ownable {
         );
 
         //cant propose already proposed proposal
+        //should not propose/execute same proposal twice, something must be different, deadline for example.
         if (ProposalsMapping[proposalID].proposalDeadline > 0)
             revert AlreadyProposed();
 
@@ -133,7 +134,7 @@ contract GoverningBoard is Ownable {
         if (_numOfVotes == 0) revert InvalidVotingPower();
 
         //mark member as voted.
-        BoardMemberVoted[_proposalID][msg.sender] == true;
+        BoardMemberVoted[_proposalID][msg.sender] = true;
 
         //vote
         VoteCount[_proposalID] += _numOfVotes;
