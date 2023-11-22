@@ -34,10 +34,10 @@ contract GoverningBoard is Ownable {
 
     mapping(bytes32 => Proposal) public ProposalsMapping;
     mapping(bytes32 => uint) public VoteCount;
-    mapping(bytes32 => mapping(address => bool)) public BoardMemberVoted;
+    mapping(bytes32 => mapping(uint => bool)) public BoardMemberVoted;
 
     event Proposed(bytes32 proposalID, uint currentTimeStamp);
-    event Voted(address voter, uint votes, bytes32 proposalID);
+    event Voted(uint voterTokenID, uint votes, bytes32 proposalID);
     event Executed(bytes32 proposalID, uint time);
     event Vetoed(bytes32 proposalID);
     event ReceivedEther(uint value, address sender);
@@ -125,7 +125,7 @@ contract GoverningBoard is Ownable {
             getProposalStatus(_proposalID) != ProposalStatus.passed &&
             getProposalStatus(_proposalID) != ProposalStatus.active
         ) revert InvalidProposal(); //proposal must not been executed or expired
-        if (BoardMemberVoted[_proposalID][msg.sender] == true)
+        if (BoardMemberVoted[_proposalID][_tokenID] == true)
             revert InvalidVoter(); //cant vote twice
         if (governanceNFT.ownerOf(_tokenID) != msg.sender)
             revert InvalidVoter(); //msut have governance nft to vote
@@ -134,12 +134,12 @@ contract GoverningBoard is Ownable {
         if (_numOfVotes == 0) revert InvalidVotingPower();
 
         //mark member as voted.
-        BoardMemberVoted[_proposalID][msg.sender] = true;
+        BoardMemberVoted[_proposalID][_tokenID] = true;
 
         //vote
         VoteCount[_proposalID] += _numOfVotes;
 
-        emit Voted(msg.sender, _numOfVotes, _proposalID);
+        emit Voted(_tokenID,  _numOfVotes, _proposalID);
     }
 
     /// @notice callable by owner only. in some rare cases owner may step in to cancel faulty proposals
